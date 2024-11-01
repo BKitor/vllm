@@ -14,6 +14,7 @@ from vllm.config import (CacheConfig, DeviceConfig, LoadConfig, LoRAConfig,
                          SpeculativeConfig)
 from vllm.distributed import (ensure_model_parallel_initialized,
                               init_distributed_environment)
+from vllm.distributed.parallel_state import rank_is_tp_driver_worker
 from vllm.logger import init_logger
 from vllm.model_executor import set_random_seed
 from vllm.platforms import current_platform
@@ -69,7 +70,9 @@ class XPUWorker(LoraNotSupportedWorkerBase, Worker):
         self.is_driver_worker = is_driver_worker
         self.observability_config = observability_config
         if parallel_config and is_driver_worker:
-            assert rank % parallel_config.tensor_parallel_size == 0, \
+            assert rank_is_tp_driver_worker(rank,
+                    parallel_config.pipeline_parallel_size,
+                    parallel_config.tensor_parallel_size), \
                    "Driver worker should be rank 0 of tensor parallel group."
 
         self.model_runner = XPUModelRunner(  # type: ignore

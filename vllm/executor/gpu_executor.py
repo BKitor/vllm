@@ -1,5 +1,6 @@
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union
 
+from vllm.distributed.parallel_state import rank_is_tp_driver_worker
 from vllm.executor.executor_base import ExecutorAsyncBase, ExecutorBase
 from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
@@ -62,7 +63,9 @@ class GPUExecutor(ExecutorBase):
             speculative_config=self.speculative_config,
             prompt_adapter_config=self.prompt_adapter_config,
             is_driver_worker=(not self.parallel_config)
-            or (rank % self.parallel_config.tensor_parallel_size == 0),
+            or rank_is_tp_driver_worker(
+                rank, self.parallel_config.pipeline_parallel_size,
+                self.parallel_config.tensor_parallel_size),
             observability_config=self.observability_config,
         )
 

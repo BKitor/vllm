@@ -1,4 +1,5 @@
 # Copyright 2023 The vLLM team.
+# Copyright 2024, GigaIO Networks, Inc. All rights reserved.
 # Adapted from
 # https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/core/parallel_state.py
 # Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
@@ -21,6 +22,7 @@ If you only need to use the distributed environment without model/pipeline
 """
 import contextlib
 import gc
+import json
 import pickle
 import weakref
 from collections import namedtuple
@@ -999,6 +1001,84 @@ def init_distributed_environment(
             "world group already initialized with a different world size")
 
 
+_RANK_DEV_MAP: Optional[Dict[str, List[int]]] = None
+
+
+def get_rank_dev_map(pp_size: int,
+                     tp_size: int) -> Optional[Dict[str, List[int]]]:
+    global _RANK_DEV_MAP
+    if _RANK_DEV_MAP is not None:
+        return _RANK_DEV_MAP.copy()
+
+    drm_str = envs.VLLM_LOCAL_RANK_DEV_MAP
+    if not drm_str:
+        _RANK_DEV_MAP = {}
+        return None
+
+    try:
+        jrdmobj = json.loads(drm_str)
+        if not jrdmobj:
+            _RANK_DEV_MAP = {}
+            return None
+    except json.JSONDecodeError as e:
+        logger.error("JSON decode error parsing VLLM_LOCAL_RANK_DEV_MAP")
+        logger.error(e)
+        raise
+
+    if len(jrdmobj) == 0:
+        _RANK_DEV_MAP = jrdmobj
+        return None
+
+    assert len(jrdmobj) == pp_size, (
+        f"VLLM_LOCAL_RANK_DEV_MAP: not enough tp-groups "
+        f"(expected {pp_size}, actual {len(jrdmobj)})")
+
+    all_devs = []
+    tp_groups = []
+    for tpk in jrdmobj:
+        assert tpk.startswith("tp-"), f"malformed tp-group key {tpk}"
+        k_split = tpk.split("-")
+        assert len(k_split) == 2 and k_split[-1].isdigit(
+        ), f"malformed tp-group key {tpk}"
+        tp_group = int(k_split[-1], 10)
+        assert tp_group >= 0 and tp_group < pp_size, (
+            f"tp-group key {tpk} out-of-bounds")
+        assert tp_group not in tp_groups, f"tp-group {tpk} double-mapped"
+        tp_groups.append(tp_group)
+
+        assert len(jrdmobj[tpk]) == tp_size, (
+            f"VLLM_LOCAL_RANK_DEV_MAP: Len of group {tpk} != tp-ws {tp_size}")
+        for d in jrdmobj[tpk]:
+            assert d >= 0 and d < pp_size * tp_size, (
+                f"VLLM_LOCAL_RANK_DEV_MAP device {d} out-of-bounds")
+            assert d not in all_devs, (
+                f"VLLM_LOCAL_RANK_DEV_MAP device {d} double mapped")
+            all_devs.append(d)
+
+    _RANK_DEV_MAP = jrdmobj
+    return jrdmobj
+
+
+def get_tp_group_ranks(rdmap: Dict[str, List[int]]) -> List[List[int]]:
+    return list(rdmap.values())
+
+
+def get_pp_group_ranks(rdmap: Dict[str, List[int]],
+                       num_pp_groups: int) -> List[List[int]]:
+    retlist = []
+    for i in range(num_pp_groups):
+        retlist.append([rdmap[dk][i] for dk in rdmap])
+
+    return retlist
+
+
+def rank_is_tp_driver_worker(rank: int, pp_size: int, tp_size: int) -> bool:
+    rdm = get_rank_dev_map(pp_size, tp_size)
+    if not rdm:
+        return rank % tp_size == 0
+    return any(rank == rdm[k][0] for k in rdm)
+
+
 def initialize_model_parallel(
     tensor_model_parallel_size: int = 1,
     pipeline_model_parallel_size: int = 1,
@@ -1039,6 +1119,12 @@ def initialize_model_parallel(
             f"tensor_model_parallel_size ({tensor_model_parallel_size}) x "
             f"pipeline_model_parallel_size ({pipeline_model_parallel_size})")
 
+    rdmap = get_rank_dev_map(pipeline_model_parallel_size,
+                             tensor_model_parallel_size)
+    logger.info(
+        "%s",
+        f"found rank-dev-map: {rdmap}" if rdmap else "No rank-dev-map found")
+
     # Build the tensor model-parallel groups.
     num_tensor_model_parallel_groups: int = (world_size //
                                              tensor_model_parallel_size)
@@ -1051,25 +1137,34 @@ def initialize_model_parallel(
                   (i + 1) * tensor_model_parallel_size))
         group_ranks.append(ranks)
 
+    # apply dev-rank remapping
+    tp_group_ranks = get_tp_group_ranks(rdmap) if rdmap else group_ranks
+    logger.debug("tp_group_ranks: %r", tp_group_ranks)
+
     # message queue broadcaster is only used in tensor model parallel group
-    _TP = init_model_parallel_group(group_ranks,
+    _TP = init_model_parallel_group(tp_group_ranks,
                                     get_world_group().local_rank,
                                     backend,
                                     use_message_queue_broadcaster=True,
                                     group_name="tp")
 
     # Build the pipeline model-parallel groups.
-    num_pipeline_model_parallel_groups: int = (world_size //
-                                               pipeline_model_parallel_size)
+    num_pp_groups: int = world_size // pipeline_model_parallel_size
     global _PP
     assert _PP is None, (
         "pipeline model parallel group is already initialized")
     group_ranks = []
-    for i in range(num_pipeline_model_parallel_groups):
-        ranks = list(range(i, world_size, num_pipeline_model_parallel_groups))
-        group_ranks.append(ranks)
+    for i in range(num_pp_groups):
+        ranks = list(range(i, world_size, num_pp_groups))
+        group_ranks.append(ranks)  # scatered w/ stride ws/pp-ws
+
+    # apply dev-rank remapping
+    pp_group_ranks = get_pp_group_ranks(
+        rdmap, num_pp_groups) if rdmap else group_ranks
+    logger.debug("pp_group_ranks: %r", tp_group_ranks)
+
     # pipeline parallel does not need custom allreduce
-    _PP = init_model_parallel_group(group_ranks,
+    _PP = init_model_parallel_group(pp_group_ranks,
                                     get_world_group().local_rank,
                                     backend,
                                     use_custom_allreduce=False,

@@ -70,6 +70,7 @@ if TYPE_CHECKING:
     VLLM_CUSTOM_OPS: List[str] = []
     VLLM_DISABLED_KERNELS: List[str] = []
     VLLM_USE_V1: bool = False
+    VLLM_LOCAL_RANK_DEV_MAP: str = "{}"
 
 
 def get_default_cache_root():
@@ -465,8 +466,9 @@ environment_variables: Dict[str, Callable[[], Any]] = {
     # If set, use the V1 code path.
     "VLLM_USE_V1":
     lambda: bool(int(os.getenv("VLLM_USE_V1", "0"))),
+    "VLLM_LOCAL_RANK_DEV_MAP":
+    lambda: ((os.environ.get("VLLM_LOCAL_RANK_DEV_MAP", "{}")))
 }
-
 # end-env-vars-definition
 
 

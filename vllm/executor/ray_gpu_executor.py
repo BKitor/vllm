@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import msgspec
 
 import vllm.envs as envs
+from vllm.distributed.parallel_state import rank_is_tp_driver_worker
 from vllm.executor.distributed_gpu_executor import (  # yapf: disable
     DistributedGPUExecutor, DistributedGPUExecutorAsync)
 from vllm.executor.msgspec_utils import encode_hook
@@ -307,7 +308,9 @@ class RayGPUExecutor(DistributedGPUExecutor):
         for index, worker in enumerate(self.workers):
             # The driver worker is rank 0 and not in self.workers.
             rank = index + 1
-            if rank % self.parallel_config.tensor_parallel_size == 0:
+            if rank_is_tp_driver_worker(
+                    rank, self.parallel_config.pipeline_parallel_size,
+                    self.parallel_config.tensor_parallel_size):
                 self.tp_driver_workers.append(worker)
             else:
                 self.non_driver_workers.append(worker)

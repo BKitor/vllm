@@ -14,6 +14,7 @@ from vllm.config import (CacheConfig, DeviceConfig, LoadConfig, LoRAConfig,
 from vllm.distributed import (ensure_model_parallel_initialized,
                               init_distributed_environment,
                               set_custom_all_reduce)
+from vllm.distributed.parallel_state import rank_is_tp_driver_worker
 from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
 from vllm.model_executor import set_random_seed
@@ -72,7 +73,9 @@ class Worker(LocalOrDistributedWorkerBase):
         self.prompt_adapter_config = prompt_adapter_config
         self.is_driver_worker = is_driver_worker
         if parallel_config and is_driver_worker:
-            assert rank % parallel_config.tensor_parallel_size == 0, \
+            assert rank_is_tp_driver_worker(rank,
+                        parallel_config.pipeline_parallel_size,
+                        parallel_config.tensor_parallel_size), \
                    "Driver worker should be rank 0 of tensor parallel group."
         if self.model_config.trust_remote_code:
             # note: lazy import to avoid importing torch before initializing

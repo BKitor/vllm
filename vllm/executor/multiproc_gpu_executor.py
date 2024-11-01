@@ -5,6 +5,7 @@ from typing import Any, List, Optional
 
 import torch
 
+from vllm.distributed.parallel_state import rank_is_tp_driver_worker
 from vllm.executor.distributed_gpu_executor import (  # yapf: disable
     DistributedGPUExecutor, DistributedGPUExecutorAsync)
 from vllm.executor.gpu_executor import create_worker
@@ -33,6 +34,7 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
         # Create the parallel GPU workers.
         world_size = self.parallel_config.world_size
         tensor_parallel_size = self.parallel_config.tensor_parallel_size
+        pipeline_parallel_size = self.parallel_config.pipeline_parallel_size
 
         # Ensure that VLLM_INSTANCE_ID is set, to be inherited by workers
         os.environ["VLLM_INSTANCE_ID"] = get_vllm_instance_id()
@@ -93,7 +95,8 @@ class MultiprocessingGPUExecutor(DistributedGPUExecutor):
                             distributed_init_method=distributed_init_method,
                         )))
                 self.workers.append(worker)
-                if rank % tensor_parallel_size == 0:
+                if rank_is_tp_driver_worker(rank, pipeline_parallel_size,
+                                            tensor_parallel_size):
                     self.tp_driver_workers.append(worker)
                 else:
                     self.non_driver_workers.append(worker)
