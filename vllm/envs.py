@@ -70,6 +70,7 @@ if TYPE_CHECKING:
     VLLM_DISABLED_KERNELS: List[str] = []
     VLLM_USE_V1: bool = False
     VLLM_ENABLE_V1_MULTIPROCESSING: bool = False
+    VLLM_LOCAL_RANK_DEV_MAP: str = "{}"
 
 
 def get_default_cache_root():
@@ -457,8 +458,9 @@ environment_variables: Dict[str, Callable[[], Any]] = {
     # If set, enable multiprocessing in LLM for the V1 code path.
     "VLLM_ENABLE_V1_MULTIPROCESSING":
     lambda: bool(int(os.getenv("VLLM_ENABLE_V1_MULTIPROCESSING", "0"))),
+    "VLLM_LOCAL_RANK_DEV_MAP":
+    lambda: os.getenv("VLLM_LOCAL_RANK_DEV_MAP", "{}")
 }
-
 # end-env-vars-definition
 
 
