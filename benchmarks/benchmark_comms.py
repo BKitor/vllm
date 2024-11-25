@@ -55,7 +55,7 @@ class BMResult:
                         average=sum(bwlst) / len(bwlst))
 
     @staticmethod
-    def ar_busbw_from_latencies(latencies: List[float], msize: int, 
+    def ar_busbw_from_latencies(latencies: List[float], msize: int,
                                 ndevs: int):
         # B = S/t * (2*(n-1)/n) = algbw * (2*(n-1)/n)
         bwlst = list(
@@ -71,8 +71,7 @@ class BMResult:
     @staticmethod
     def g_busbw_from_latencies(latencies: List[float], msize: int):
         # B = S/t * n = algbw * n
-        bwlst = list(
-            map(lambda x: (msize * 1e-9 / x), latencies))
+        bwlst = list(map(lambda x: (msize * 1e-9 / x), latencies))
         bwlst.sort()
         return BMResult("gather",
                         minimum=bwlst[0],
@@ -83,8 +82,7 @@ class BMResult:
     @staticmethod
     def b_busbw_from_latencies(latencies: List[float], msize: int):
         # B = S/t * n = algbw * n
-        bwlst = list(
-            map(lambda x: (msize * 1e-9 / x), latencies))
+        bwlst = list(map(lambda x: (msize * 1e-9 / x), latencies))
         bwlst.sort()
         return BMResult("broadcast",
                         minimum=bwlst[0],
@@ -104,8 +102,8 @@ class BMConfig:
     msize: int
     metric: str
     bm_name: str
-    bm_print: Callable[[List[BMResult], Self], None]
-    bm_fn: Callable[[Self], List[BMResult]]
+    bm_print: Callable[[List[BMResult], Self], None] | None
+    bm_fn: Callable[[Self], List[BMResult]] | None
 
 
 # g0 and g1 are ranks in gc
@@ -165,8 +163,9 @@ def measure_tdict_bw(tdict: Dict[str, Union[torch.Tensor, Any]], g0: int,
 
     tdict_p2p_iter = range(bmcfg.iters + bmcfg.warmups)
     if tprank == 0 and pprank == g0:
-        tdict_p2p_iter = tqdm(tdict_p2p_iter, desc="send/recv_tensor_dict itterations")
-    
+        tdict_p2p_iter = tqdm(tdict_p2p_iter,
+                              desc="send/recv_tensor_dict itterations")
+
     for i in tdict_p2p_iter:
         if pprank == g0:
             ppgc.recv(sync_word.shape, sync_word.dtype, g1)
@@ -240,8 +239,9 @@ def measure_all_reduce(buff: torch.Tensor, bmcfg: BMConfig,
     return BMResult.ar_busbw_from_latencies(latencies, bmcfg.msize,
                                             bmcfg.tp_size)
 
+
 def measure_gather(buff: torch.Tensor, bmcfg: BMConfig,
-                       gc: GroupCoordinator) -> BMResult:
+                   gc: GroupCoordinator) -> BMResult:
     assert buff.nbytes == bmcfg.msize
 
     ar_bm_iter = range(bmcfg.iters + bmcfg.warmups)
@@ -263,8 +263,9 @@ def measure_gather(buff: torch.Tensor, bmcfg: BMConfig,
 
     return BMResult.g_busbw_from_latencies(latencies, bmcfg.msize)
 
+
 def measure_broadcast(buff: torch.Tensor, bmcfg: BMConfig,
-                       gc: GroupCoordinator) -> BMResult:
+                      gc: GroupCoordinator) -> BMResult:
     assert buff.nbytes == bmcfg.msize
 
     ar_bm_iter = range(bmcfg.iters + bmcfg.warmups)
@@ -288,8 +289,11 @@ def measure_broadcast(buff: torch.Tensor, bmcfg: BMConfig,
 
 
 def print_p2p_bm(results: List[BMResult], bmcfg: BMConfig):
+    assert len(results) == bmcfg.ndevs * bmcfg.ndevs
+    assert all([r.bm_name == "p2p" for r in results])
     ndevs = bmcfg.ndevs
 
+    print("NCCL P2P Bandwidth msize: {bmcfg.msize}")
     header = f"{bmcfg.metric:<13}"
     for g in range(ndevs):
         header += f"R{g:<11}"
@@ -314,7 +318,9 @@ def bm_p2p_bw(bmcfg: BMConfig) -> List[BMResult]:
 
     results = []
     for g0 in tqdm(range(world_size), desc="Send rank", disable=disable_tqdm):
-        for g1 in tqdm(range(world_size), desc="Recv rank", disable=disable_tqdm):
+        for g1 in tqdm(range(world_size),
+                       desc="Recv rank",
+                       disable=disable_tqdm):
             if g0 == g1:
                 if rank == g0:
                     results.append(BMResult("p2p", 0.0, 0.0, 0.0, 0.0))
@@ -335,13 +341,17 @@ def bm_p2p_bw(bmcfg: BMConfig) -> List[BMResult]:
 def print_tp_colls(results: List[BMResult], bmcfg: BMConfig):
     assert len(results) == bmcfg.ndevs * 4
 
+    print(
+        f"TP xCCL Collective Bus-Bandwidth, msize: {bmcfg.msize} tp_size: {bmcfg.tp_size} pp_size: {bmcfg.pp_size}"
+    )
+
     for i in range(bmcfg.ndevs):
         ag_res = results[i * 4]
         ar_res = results[i * 4 + 1]
         g_res = results[i * 4 + 2]
         b_res = results[i * 4 + 3]
 
-        assert ag_res.bm_name == "all_gather" and ar_res.bm_name == "all_reduce" and g_res.bm_name == "gather" and b_res.bm_name == "broadcast"
+        assert ag_res.bm_name == "all_gather" and ar_res.bm_name == "all_reduce" and g_res.bm_name == "gather" and b_res.bm_name == "broadcast", f"got {ag_res.bm_name}/{ar_res.bm_name}/{g_res.bm_name}/{b_res.bm_name}"
 
         rank = i
         dev_idx = pstate.get_device_idx(i)
@@ -354,7 +364,7 @@ def print_tp_colls(results: List[BMResult], bmcfg: BMConfig):
             g_m = getattr(g_res, m)
             b_m = getattr(b_res, m)
             print(
-                    f"{m:8} all_gather: {ag_m:6.2f}GB/s, all_reduce: {ar_m:6.2f}GB/s, gather: {g_m:6.2f}GB/s, broadcast: {b_m:6.2f}GB/s"
+                f"{m:8} all_gather: {ag_m:6.2f}GB/s, all_reduce: {ar_m:6.2f}GB/s, gather: {g_m:6.2f}GB/s, broadcast: {b_m:6.2f}GB/s"
             )
 
 
@@ -370,7 +380,7 @@ def bm_tp_colls(bmcfg: BMConfig) -> List[BMResult]:
     ag_results = measure_all_gather(buff, bmcfg, tpgc)
     ar_results = measure_all_reduce(buff, bmcfg, tpgc)
     g_results = measure_gather(buff, bmcfg, tpgc)
-    b_results = measure_broadcast(buff, bmcfg, tpgc) 
+    b_results = measure_broadcast(buff, bmcfg, tpgc)
     # TODO
 
     tpgc.barrier()
@@ -379,8 +389,23 @@ def bm_tp_colls(bmcfg: BMConfig) -> List[BMResult]:
 
 
 def print_pp_p2p(results: List[BMResult], bmcfg: BMConfig):
+    return _print_pp_p2p(results, bmcfg, "send/recv")
 
-    assert len(results) == bmcfg.ndevs - (bmcfg.ndevs // bmcfg.pp_size)
+
+def print_pp_tdict(results: List[BMResult], bmcfg: BMConfig):
+    return _print_pp_p2p(results, bmcfg, "tensor_dict send/recv")
+
+
+def _print_pp_p2p(results: List[BMResult], bmcfg: BMConfig, name: str):
+
+    assert len(
+        results
+    ) == bmcfg.ndevs, f"len(results): {len(results)}, expected: {bmcfg.ndevs}"
+    assert all([r.bm_name == "p2p" or r.bm_name == "none" for r in results])
+
+    print(
+        f"PP xCCL {name} bandwidth, msize: {bmcfg.msize} tp_size: {bmcfg.tp_size} pp_size: {bmcfg.pp_size}"
+    )
 
     num_pp_groups = bmcfg.ndevs // bmcfg.pp_size
     for i in range(num_pp_groups):
@@ -408,7 +433,7 @@ def bm_pp_p2p(bmcfg: BMConfig) -> List[BMResult]:
     pipeline_iter = range(bmcfg.pp_size - 1)
     if rank == 0:
         pipeline_iter = tqdm(pipeline_iter)
-    
+
     results = []
     for i in pipeline_iter:
         if rank_in_group == i or rank_in_group == i + 1:
@@ -416,6 +441,11 @@ def bm_pp_p2p(bmcfg: BMConfig) -> List[BMResult]:
             if rank_in_group == i:
                 results.append(res)
         ppgc.barrier()
+
+    if len(results) == 0:
+        results.append(BMResult("none", 0.0, 0.0, 0.0, 0.0))
+
+    assert len(results) == 1
 
     return results
 
@@ -427,12 +457,11 @@ def bm_pp_tdict(bmcfg: BMConfig) -> List[BMResult]:
 
     # 'inspired' by vllm/model_executor/models/llamapy::345
     tdict = {
-        "hidden_states": alloc_dev_buf(bmcfg.msize // 2 , device),
-        "residual": alloc_dev_buf(bmcfg.msize // 2 , device),
+        "hidden_states": alloc_dev_buf(bmcfg.msize // 2, device),
+        "residual": alloc_dev_buf(bmcfg.msize // 2, device),
     }
 
     results = []
-
     pipeline_iter = range(bmcfg.pp_size - 1)
     if ppgc.rank == 0:
         pipeline_iter = tqdm(pipeline_iter, desc="Pipeline stages")
@@ -444,6 +473,11 @@ def bm_pp_tdict(bmcfg: BMConfig) -> List[BMResult]:
                 results.append(res)
         ppgc.barrier()
 
+    if len(results) == 0:
+        results.append(BMResult("none", 0.0, 0.0, 0.0, 0.0))
+
+    assert len(results) == 1
+
     return results
 
 
@@ -453,16 +487,25 @@ def proc_fn(cfgtpl: Tuple[BMConfig, int, torch.device]):
     device = cfgtpl[2]
     backend = "nccl"
     torch.cuda.set_device(device)
-    pstate.init_distributed_environment(world_size=bmcfg.ndevs, rank=rank,
-                                        distributed_init_method=bmcfg.distributed_init_method, local_rank=rank,
-                                        device=device, backend=backend)
+    pstate.init_distributed_environment(
+        world_size=bmcfg.ndevs,
+        rank=rank,
+        distributed_init_method=bmcfg.distributed_init_method,
+        local_rank=rank,
+        device=device,
+        backend=backend)
 
     pstate.initialize_model_parallel(bmcfg.tp_size, bmcfg.pp_size, backend)
 
     assert pstate.get_world_group().device == pstate.get_pp_group().device
     assert pstate.get_world_group().device == pstate.get_tp_group().device
 
-    results = bmcfg.bm_fn(bmcfg)
+    if bmcfg.bm_name == "all":
+        results = []
+        for bm in bm_dict:
+            results += bm_dict[bm][0](bmcfg)
+    else:
+        results = bmcfg.bm_fn(bmcfg)
 
     pstate.destroy_model_parallel()
     pstate.destroy_distributed_environment()
@@ -474,15 +517,15 @@ bm_dict = {
     "p2p_bw": (bm_p2p_bw, print_p2p_bm),
     "tp_colls": (bm_tp_colls, print_tp_colls),
     "pp_p2p": (bm_pp_p2p, print_pp_p2p),
-    "pp_tdict": (bm_pp_tdict, print_pp_p2p),
+    "pp_tdict": (bm_pp_tdict, print_pp_tdict),
 }
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--iters", type=int, default=30)
-    parser.add_argument("--warmups", type=int, default=3)
-    parser.add_argument("--msize", type=int, default=1 << 22)
+    parser.add_argument("--iters", type=int, default=50)
+    parser.add_argument("--warmups", type=int, default=5)
+    parser.add_argument("--msize", type=int, default=1 << 28)
     parser.add_argument("--pp-size", type=int, default=1)
     parser.add_argument("--tp-size", type=int, default=1)
     parser.add_argument("--metric",
@@ -491,12 +534,13 @@ def main():
                         default="median")
     parser.add_argument("--bm-name",
                         type=str,
-                        choices=bm_dict.keys(),
-                        default="p2p_bw")
+                        choices=list(bm_dict.keys()) + ["all"],
+                        default="all")
     args = parser.parse_args()
 
     argsdict = vars(args)
-    argsdict["bm_fn"], argsdict["bm_print"] = bm_dict[argsdict["bm_name"]]
+    argsdict["bm_fn"], argsdict["bm_print"] = bm_dict[
+        argsdict["bm_name"]] if argsdict["bm_name"] != "all" else None, None
     argsdict["ndevs"] = torch.cuda.device_count()
     argsdict["distributed_init_method"] = get_distributed_init_method(
         "127.0.0.1", get_open_port())
@@ -515,7 +559,48 @@ def main():
     p = multiprocessing.Pool(bmcfg.ndevs)
     results = p.map(proc_fn, cfgs)
 
-    bmcfg.bm_print(list(itertools.chain(*results)), bmcfg)
+    if bmcfg.bm_name == "all":
+        n_p2p_bw_res = bmcfg.ndevs
+        n_tp_coll_res = 4
+        n_pp_p2p_res = 1
+        n_pp_tdict_res = 1
+
+        p2p_bw_eidx = bmcfg.ndevs * n_p2p_bw_res
+        tp_coll_eidx = p2p_bw_eidx + bmcfg.ndevs * n_tp_coll_res
+        pp_p2p_eidx = tp_coll_eidx + bmcfg.ndevs * n_pp_p2p_res
+        pp_tdict_eidx = pp_p2p_eidx + bmcfg.ndevs * n_pp_tdict_res
+
+        flat_reslist = []
+        for r in results:
+            flat_reslist += r[0:n_p2p_bw_res]
+        for r in results:
+            flat_reslist += r[n_p2p_bw_res:n_p2p_bw_res + n_tp_coll_res]
+        for r in results:
+            flat_reslist += r[n_p2p_bw_res + n_tp_coll_res:n_p2p_bw_res +
+                              n_tp_coll_res + n_pp_p2p_res]
+        for r in results:
+            flat_reslist += r[n_p2p_bw_res + n_tp_coll_res +
+                              n_pp_p2p_res:n_p2p_bw_res + n_tp_coll_res +
+                              n_pp_p2p_res + n_pp_tdict_res]
+
+        for bm in bm_dict:
+            if bm == "p2p_bw":
+                sidx = 0
+                eidx = p2p_bw_eidx
+            elif bm == "tp_colls":
+                sidx = p2p_bw_eidx
+                eidx = tp_coll_eidx
+            elif bm == "pp_p2p":
+                sidx = tp_coll_eidx
+                eidx = pp_p2p_eidx
+            elif bm == "pp_tdict":
+                sidx = pp_p2p_eidx
+                eidx = pp_tdict_eidx
+
+            bm_dict[bm][1](flat_reslist[sidx:eidx], bmcfg)
+
+    else:
+        bmcfg.bm_print(list(itertools.chain(*results)), bmcfg)
 
     p.close()
     p.join()
