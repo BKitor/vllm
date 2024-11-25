@@ -293,7 +293,7 @@ def print_p2p_bm(results: List[BMResult], bmcfg: BMConfig):
     assert all([r.bm_name == "p2p" for r in results])
     ndevs = bmcfg.ndevs
 
-    print("NCCL P2P Bandwidth msize: {bmcfg.msize}")
+    print(f"NCCL P2P Bandwidth msize: {bmcfg.msize}")
     header = f"{bmcfg.metric:<13}"
     for g in range(ndevs):
         header += f"R{g:<11}"
